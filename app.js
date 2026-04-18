@@ -4,12 +4,13 @@
    ✅ Google Sign-In
    ✅ Generate يطلب Sign In دائماً قبل يولّد
    ✅ Usage counter حقيقي من Supabase
+   ✅ Anti-abuse: token + fingerprint sent with each request
 ═══════════════════════════════════════════════════════════════ */
 
 // ========== CONFIG ==========
 const CONFIG = {
   SUPABASE_URL: "https://jkibvkgnalbxfsxwhkmq.supabase.co",
-  SUPABASE_KEY: "sb_publishable_xO4ovopvXq_AEFbSB-au1A_CKRmfGAN",
+  SUPABASE_KEY: "sb_publishable_9S_ZlUlYtNKnYkpPQidGSw_Fl5x8wWU",
   FREE_LIMIT: 5,
 };
 
@@ -20,7 +21,6 @@ let authMode = "signin";
 // ========== Supabase Init ==========
 function initSupabase() {
   try {
-    // ✅ المشكلة كانت هون — الشرط كان معكوس، كان يوقف لما يلاقي URL حقيقي!
     if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL === "YOUR_SUPABASE_URL") {
       console.warn("Supabase not configured — guest mode");
       loadLocalUsage();
@@ -194,64 +194,43 @@ async function submitAuth() {
 // ========== Google Sign-In ==========
 async function signInWithGoogle() {
   if (!supabaseClient) { showAuthError("Auth service not configured."); return; }
-
-  const btn = document.getElementById("google-signin-btn");
-  if (btn) { btn.disabled = true; btn.textContent = "Redirecting..."; }
-
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: window.location.origin,
-      },
+      options: { redirectTo: window.location.origin },
     });
     if (error) throw error;
   } catch (e) {
-    showAuthError("Google Sign-In failed: " + e.message);
-    if (btn) { btn.disabled = false; btn.textContent = "Continue with Google"; }
+    showAuthError(e.message);
   }
 }
 
 function showAuthError(msg) {
   const el = document.getElementById("auth-error");
-  el.textContent = msg;
-  el.classList.remove("hidden");
+  if (el) { el.textContent = msg; el.classList.remove("hidden"); }
 }
 
-// ========== Welcome Modal ==========
 function showWelcomeModal(name) {
-  let modal = document.getElementById("welcome-modal");
-  if (!modal) {
-    modal = document.createElement("div");
-    modal.id = "welcome-modal";
-    modal.className = "modal-overlay";
-    document.body.appendChild(modal);
-  }
-  modal.classList.remove("hidden");
+  closeModal("auth-modal");
+  const modal = document.createElement("div");
+  modal.id = "welcome-modal";
+  modal.className = "modal-overlay";
   modal.innerHTML = `
-    <div class="modal" style="text-align:center;max-width:440px">
-      <div style="font-size:52px;margin-bottom:8px">🎉</div>
-      <h2 style="font-family:'Syne',sans-serif;font-size:28px;margin-bottom:8px">Welcome, ${name}!</h2>
-      <p style="color:#7a7a94;margin-bottom:24px;font-size:15px">You're all set. Start creating viral content that stops the scroll. 🔥</p>
-      <div style="background:#111118;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px;margin-bottom:24px;text-align:left">
-        <div style="display:flex;gap:10px;margin-bottom:10px;align-items:center"><span style="font-size:20px">⚡</span><span style="font-size:14px"><strong>${CONFIG.FREE_LIMIT} free generations</strong> per day</span></div>
-        <div style="display:flex;gap:10px;margin-bottom:10px;align-items:center"><span style="font-size:20px">🌍</span><span style="font-size:14px">Arabic dialects + English supported</span></div>
-        <div style="display:flex;gap:10px;align-items:center"><span style="font-size:20px">✦</span><span style="font-size:14px">Upgrade to Pro for <strong>unlimited</strong> generations</span></div>
-      </div>
-      <button class="btn-generate" style="width:100%;margin-bottom:10px" onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';document.getElementById('topic').focus()">⚡ Start Generating Now</button>
-      <button onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';showUpgradeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);color:#7a7a94;width:100%;padding:12px;border-radius:12px;cursor:pointer;font-size:14px">✦ See Pro Plans</button>
+    <div class="modal" style="text-align:center;max-width:400px">
+      <div style="font-size:48px;margin-bottom:16px">🎉</div>
+      <h2 style="font-family:'Syne',sans-serif;margin-bottom:10px">Welcome, ${name}!</h2>
+      <p style="color:#7a7a94;margin-bottom:20px">You have <strong style="color:#f5c842">5 free generations</strong> per day. Start creating!</p>
+      <button class="btn-generate" style="width:100%" onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow=''">Let's Go 🚀</button>
     </div>
   `;
+  document.body.appendChild(modal);
   document.body.style.overflow = "hidden";
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) { modal.remove(); document.body.style.overflow = ""; }
-  });
 }
 
 function showConfirmEmailModal(name) {
-  let modal = document.getElementById("welcome-modal");
-  if (!modal) { modal = document.createElement("div"); modal.id = "welcome-modal"; modal.className = "modal-overlay"; document.body.appendChild(modal); }
-  modal.classList.remove("hidden");
+  const modal = document.createElement("div");
+  modal.id = "welcome-modal";
+  modal.className = "modal-overlay";
   modal.innerHTML = `
     <div class="modal" style="text-align:center;max-width:400px">
       <div style="font-size:48px;margin-bottom:16px">📧</div>
@@ -260,6 +239,7 @@ function showConfirmEmailModal(name) {
       <button class="btn-generate" style="width:100%" onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';openAuthModal('signin')">→ Go to Sign In</button>
     </div>
   `;
+  document.body.appendChild(modal);
   document.body.style.overflow = "hidden";
 }
 
@@ -329,14 +309,12 @@ async function handleGenerate() {
 
   if (!topic) { showToast("⚠️ Please enter a topic first!"); document.getElementById("topic").focus(); return; }
 
-  // ✅ لازم يكون مسجل دخول دائماً قبل يولّد
   if (!currentUser) {
     openAuthModal("signin");
     showToast("👋 Please sign in first to generate content!");
     return;
   }
 
-  // ✅ تحقق من الـ usage
   const usageCount = await getUsageCount();
   if (usageCount >= CONFIG.FREE_LIMIT) {
     showUpgradeModal();
@@ -346,10 +324,22 @@ async function handleGenerate() {
 
   setLoading(true);
   try {
+    // Get live session token for server-side verification
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    const token = session?.access_token;
+    if (!token) { openAuthModal("signin"); return; } // session expired
+
     const res = await fetch("/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic, language, style, platform }),
+      body: JSON.stringify({
+        topic,
+        language,
+        style,
+        platform,
+        token,                        // ← verified server-side against Supabase
+        fingerprint: generateFingerprint(), // ← device signal for cross-account detection
+      }),
     });
 
     if (!res.ok) {
@@ -439,6 +429,28 @@ function showToast(msg) {
 // ========== Helpers ==========
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 function escapeHtml(str) { const d = document.createElement("div"); d.appendChild(document.createTextNode(str)); return d.innerHTML; }
+
+// ========== Device Fingerprint (lightweight, no CDN needed) ==========
+// Builds a stable hash from browser/device signals — not perfect but raises the bar
+function generateFingerprint() {
+  const signals = [
+    navigator.userAgent,
+    navigator.language,
+    navigator.languages?.join(",") || "",
+    `${screen.width}x${screen.height}x${screen.colorDepth}`,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || "",
+    navigator.deviceMemory || "",
+    navigator.platform,
+  ].join("|");
+
+  // djb2 hash — fast, deterministic, no crypto API needed
+  let h = 5381;
+  for (let i = 0; i < signals.length; i++) {
+    h = Math.imul(h, 33) ^ signals.charCodeAt(i);
+  }
+  return (h >>> 0).toString(36);
+}
 
 // ========== Init ==========
 document.addEventListener("DOMContentLoaded", () => {
