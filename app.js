@@ -10,7 +10,7 @@
 // ========== CONFIG ==========
 const CONFIG = {
   SUPABASE_URL: "https://jkibvkgnalbxfsxwhkmq.supabase.co",
-  SUPABASE_KEY: "sb_publishable_9S_ZlUlYtNKnYkpPQidGSw_Fl5x8wWU",
+  SUPABASE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpraWJ2a2duYWxieGZzeHdoa21xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NzAxOTAsImV4cCI6MjA5MTI0NjE5MH0.aEsVz839fc8DQxfANiszNnV53eQMH7__HU3yKah3X3s",
   FREE_LIMIT: 5,
 };
 
