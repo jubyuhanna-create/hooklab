@@ -1,243 +1,353 @@
-import express from "express";
-import fetch from "node-fetch";
-import cors from "cors";
-import path from "path";
-import dotenv from "dotenv";
-import rateLimit from "express-rate-limit";
-import { fileURLToPath } from "url";
+/**
+ * HookLab — Backend Server
+ * Node.js + Express + Gemini API + Supabase
+ * 
+ * Endpoints:
+ *   POST /generate        → call Gemini, return hooks/script/caption
+ *   POST /auth/signup     → Supabase sign up
+ *   POST /auth/login      → Supabase login
+ *   POST /auth/logout     → Supabase logout
+ *   GET  /usage           → get today's usage count for user
+ */
 
-dotenv.config();
+require("dotenv").config();
+const express = require("express");
+const cors    = require("cors");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { createClient }       = require("@supabase/supabase-js");
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
+/* ─────────────────────────────────────────────
+   INIT
+───────────────────────────────────────────── */
+const app  = express();
+const PORT = process.env.PORT || 3001;
 
-app.set("trust proxy", 1);
-app.use(cors());
+app.use(cors({ origin: "*" }));          // tighten in production
 app.use(express.json());
-app.use(express.static(__dirname));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
-// ====================================================
-// ✅ المفاتيح تُقرأ من .env فقط — لا تحط أي مفتاح هنا
-// ====================================================
-const OPENROUTER_API_KEY = process.env.GEMINI_API_KEY; // نفس المتغير — بس حطّ فيه مفتاح OpenRouter
-const SUPABASE_URL       = process.env.SUPABASE_URL    || "";
-const SUPABASE_ANON_KEY  = process.env.SUPABASE_ANON_KEY || "";
+// Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const COOLDOWN_MS      = 10_000;
-const DAILY_USER_LIMIT = 5;
-const FP_REDUCED_LIMIT = 2;
+// Supabase (service role key — never exposed to frontend)
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY   // service role gives full DB access server-side
+);
 
-const cooldowns           = new Map();
-const fingerprintAccounts = new Map();
+const FREE_LIMIT = 5;
 
-// ── IP Rate Limiter ──────────────────────────────────────────────────────────
-const ipLimiter = rateLimit({
-  windowMs: 24 * 60 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => req.ip,
-  message: { error: "Too many requests from this IP. Try again tomorrow." },
-});
+/* ─────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────── */
 
-// ── Verify Supabase JWT ──────────────────────────────────────────────────────
-async function verifyToken(token) {
-  if (!token || !SUPABASE_ANON_KEY) return null;
+/** Today's date as YYYY-MM-DD */
+function todayStr() {
+  return new Date().toISOString().split("T")[0];
+}
+
+/** Verify Supabase JWT and return user or null */
+async function getUserFromToken(req) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return null;
+
   try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_ANON_KEY,
-      },
-    });
-    if (!res.ok) return null;
-    const user = await res.json();
-    return user?.id ? user : null;
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return data.user;
   } catch {
     return null;
   }
 }
 
-// ── Anti-Abuse Middleware ────────────────────────────────────────────────────
-async function antiAbuse(req, res, next) {
-  const { token, fingerprint } = req.body;
+/** Get today's usage row for user_id, creating it if missing */
+async function getOrCreateUsage(userId) {
+  const today = todayStr();
 
-  if (!token)
-    return res.status(401).json({ error: "Authentication required." });
-  if (!fingerprint || fingerprint.length < 6)
-    return res.status(400).json({ error: "Invalid request signature." });
+  // Try to find existing row
+  let { data, error } = await supabase
+    .from("usage")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("date", today)
+    .single();
 
-  const user = await verifyToken(token);
-  if (!user)
-    return res.status(401).json({ error: "Session expired. Please sign in again." });
-
-  const userId = user.id;
-  const now    = Date.now();
-
-  const lastReq = cooldowns.get(userId) || 0;
-  const elapsed = now - lastReq;
-  if (elapsed < COOLDOWN_MS) {
-    const wait = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
-    return res.status(429).json({ error: `Please wait ${wait}s before generating again.` });
+  if (error && error.code === "PGRST116") {
+    // Row does not exist — create it
+    const ins = await supabase
+      .from("usage")
+      .insert({ user_id: userId, count: 0, date: today })
+      .select()
+      .single();
+    data  = ins.data;
+    error = ins.error;
   }
 
-  const accounts = fingerprintAccounts.get(fingerprint) ?? new Set();
-  accounts.add(userId);
-  fingerprintAccounts.set(fingerprint, accounts);
-  const effectiveLimit = accounts.size > 1 ? FP_REDUCED_LIMIT : DAILY_USER_LIMIT;
+  if (error) throw new Error("Usage DB error: " + error.message);
+  return data;
+}
 
-  let serverUsage = 0;
-  if (SUPABASE_ANON_KEY) {
+/** Build the Gemini prompt */
+function buildPrompt(topic, language, style, platform) {
+  return `You are an expert viral content creator for ${platform || "TikTok"}.
+
+Generate content for the following:
+Topic: ${topic}
+Language: ${language || "English"}
+Style: ${style || "Funny"}
+Platform: ${platform || "TikTok"}
+
+STRICT RULES:
+- Write EVERYTHING in ${language || "English"} language
+- Hooks must be 1-2 sentences, punchy, scroll-stopping, high curiosity
+- Script must be conversational, natural, max 90 seconds when spoken aloud
+- Caption must include 15-20 relevant hashtags
+- Match the "${style}" tone throughout ALL content
+- Output ONLY raw valid JSON — no markdown fences, no commentary
+
+OUTPUT FORMAT (valid JSON only):
+{
+  "hooks": [
+    "Hook 1 text here",
+    "Hook 2 text here",
+    "Hook 3 text here",
+    "Hook 4 text here",
+    "Hook 5 text here",
+    "Hook 6 text here",
+    "Hook 7 text here",
+    "Hook 8 text here",
+    "Hook 9 text here",
+    "Hook 10 text here"
+  ],
+  "script": "Full script text here — written as if being spoken to camera...",
+  "caption": "Caption text with emojis and hashtags here..."
+}`;
+}
+
+/** Parse raw Gemini text into { hooks, script, caption } */
+function parseResponse(raw) {
+  let text = raw.trim();
+
+  // Strip markdown fences if present
+  text = text.replace(/^```json\s*/im, "").replace(/```\s*$/im, "").trim();
+  text = text.replace(/^```\s*/im,     "").replace(/```\s*$/im, "").trim();
+
+  // First attempt: direct parse
+  try {
+    const obj = JSON.parse(text);
+    return validate(obj);
+  } catch (_) {}
+
+  // Second attempt: extract first {...} block
+  const match = text.match(/\{[\s\S]*\}/);
+  if (match) {
     try {
-      const today = new Date().toISOString().split("T")[0];
-      const usageRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/usage?user_id=eq.${userId}&date=eq.${today}&select=count`,
-        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` } }
-      );
-      const usageData = await usageRes.json();
-      serverUsage = usageData?.[0]?.count ?? 0;
-    } catch { /* non-fatal */ }
+      const obj = JSON.parse(match[0]);
+      return validate(obj);
+    } catch (_) {}
   }
 
-  if (serverUsage >= effectiveLimit) {
-    const msg = accounts.size > 1
-      ? "Multiple accounts detected on this device. Daily limit reduced."
-      : "Daily generation limit reached. Resets in 24 hours.";
-    return res.status(429).json({ error: msg });
-  }
-
-  cooldowns.set(userId, now);
-  req.verifiedUserId = userId;
-  next();
+  throw new Error("Gemini returned unparseable content. Please try again.");
 }
 
-// ── Extract JSON ─────────────────────────────────────────────────────────────
-function extractJSON(raw) {
-  if (!raw) return null;
-  let text = raw.trim()
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-
-  if (text.startsWith("{")) {
-    try { return JSON.parse(text); } catch {}
-  }
-
-  const start = text.indexOf("{");
-  const end   = text.lastIndexOf("}");
-  if (start !== -1 && end !== -1 && end > start) {
-    try { return JSON.parse(text.slice(start, end + 1)); } catch {}
-  }
-
-  return null;
+function validate(obj) {
+  if (!Array.isArray(obj.hooks) || obj.hooks.length === 0) throw new Error("Missing hooks");
+  if (typeof obj.script  !== "string" || !obj.script.trim())  throw new Error("Missing script");
+  if (typeof obj.caption !== "string" || !obj.caption.trim()) throw new Error("Missing caption");
+  return {
+    hooks:   obj.hooks.map(h => String(h).trim()).filter(Boolean),
+    script:  obj.script.trim(),
+    caption: obj.caption.trim(),
+  };
 }
 
-// ── Call OpenRouter ───────────────────────────────────────────────────────────
-async function callGemini(prompt, retries = 2) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+/* ─────────────────────────────────────────────
+   ROUTES
+───────────────────────────────────────────── */
 
-    try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 2048,
-          temperature: attempt === 0 ? 0.85 : 0.5,
-        }),
-      });
+/** Health check */
+app.get("/", (req, res) => {
+  res.json({ status: "HookLab API running", version: "1.0.0" });
+});
 
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err?.error?.message || `API error ${response.status}`);
-      }
-
-      const data    = await response.json();
-      const rawText = data?.choices?.[0]?.message?.content || "";
-
-      if (!rawText) {
-        if (attempt < retries) continue;
-        throw new Error("Empty response from AI. Please try again.");
-      }
-
-      const parsed = extractJSON(rawText);
-      if (!parsed || !Array.isArray(parsed.hooks) || parsed.hooks.length === 0) {
-        if (attempt < retries) continue;
-        throw new Error("AI response was not valid JSON. Please try again.");
-      }
-
-      return parsed;
-
-    } catch (err) {
-      clearTimeout(timeout);
-      if (err.name === "AbortError") throw new Error("Request timed out. Try again.");
-      if (attempt < retries) continue;
-      throw err;
-    }
-  }
-}
-
-// ── POST /generate ───────────────────────────────────────────────────────────
-app.post("/generate", ipLimiter, antiAbuse, async (req, res) => {
+/* ── POST /generate ── */
+app.post("/generate", async (req, res) => {
   const { topic, language, style, platform } = req.body;
 
-  if (!topic || typeof topic !== "string" || topic.trim().length < 2)
-    return res.status(400).json({ error: "Topic is required (min 2 characters)." });
-  if (topic.length > 500)
-    return res.status(400).json({ error: "Topic is too long (max 500 characters)." });
-  if (!OPENROUTER_API_KEY)
-    return res.status(500).json({ error: "❌ API key not configured on server." });
+  if (!topic || !topic.trim()) {
+    return res.status(400).json({ error: "Topic is required." });
+  }
 
-  const prompt = `You are an expert short-form video content creator for ${platform}.
+  /* ── Usage check (authenticated users) ── */
+  const user = await getUserFromToken(req);
 
-Topic: "${topic}"
-Language: ${language}
-Style: ${style}
-Platform: ${platform}
+  if (user) {
+    try {
+      // Check if user is Pro → skip limit
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("is_pro")
+        .eq("id", user.id)
+        .single();
 
-Return ONLY a raw JSON object. No markdown. No explanation. No extra text.
+      const isPro = userRow?.is_pro === true;
 
-Required format:
-{
-  "hooks": ["hook1","hook2","hook3","hook4","hook5","hook6","hook7","hook8","hook9","hook10"],
-  "script": "full script text here",
-  "caption": "caption text with #hashtags here"
-}
+      if (!isPro) {
+        const usage = await getOrCreateUsage(user.id);
+        if (usage.count >= FREE_LIMIT) {
+          return res.status(429).json({
+            error: "Daily limit reached. Upgrade to Pro for unlimited generations.",
+            limit: FREE_LIMIT,
+            used:  usage.count,
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Usage check error:", e.message);
+    }
+  }
 
-Rules:
-- Write everything in ${language}
-- Exactly 10 hooks, each unique and scroll-stopping
-- Script: under 90 seconds when read aloud
-- Caption: include exactly 15 hashtags
-- Output: ONLY the JSON object, nothing else`;
-
+  /* ── Call Gemini ── */
   try {
-    const parsed = await callGemini(prompt);
-    res.json(parsed);
+    const model  = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const prompt = buildPrompt(topic.trim(), language, style, platform);
+
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature:     0.9,
+        topK:            40,
+        topP:            0.95,
+        maxOutputTokens: 2048,
+      },
+    });
+
+    const rawText = result.response.text();
+    const parsed  = parseResponse(rawText);
+
+    /* ── Increment usage (authenticated users) ── */
+    if (user) {
+      try {
+        const today = todayStr();
+        // Upsert with increment
+        await supabase.rpc("increment_usage", { p_user_id: user.id, p_date: today });
+      } catch (e) {
+        console.error("Usage increment error:", e.message);
+      }
+    }
+
+    return res.json(parsed);
+
   } catch (err) {
-    console.error("❌ Generate error:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Gemini error:", err.message);
+    const msg = err.message.includes("API_KEY")
+      ? "Invalid Gemini API key. Check your .env file."
+      : err.message || "Generation failed. Try again.";
+    return res.status(500).json({ error: msg });
   }
 });
 
-// ── Health check ─────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => res.json({ status: "ok" }));
+/* ── POST /auth/signup ── */
+app.post("/auth/signup", async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Email and password required." });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,   // auto-confirm (no email needed for local dev)
+  });
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  // Also sign them in immediately
+  const signIn = await supabase.auth.signInWithPassword({ email, password });
+  if (signIn.error) return res.status(400).json({ error: signIn.error.message });
+
+  // Ensure users table row
+  await supabase.from("users").upsert({ id: data.user.id, email }, { onConflict: "id" });
+
+  return res.json({
+    user:         signIn.data.user,
+    access_token: signIn.data.session.access_token,
+    message:      "Account created and signed in.",
+  });
+});
+
+/* ── POST /auth/login ── */
+app.post("/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Email and password required." });
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return res.status(401).json({ error: error.message });
+
+  return res.json({
+    user:         data.user,
+    access_token: data.session.access_token,
+  });
+});
+
+/* ── POST /auth/logout ── (client just drops the token, but we can invalidate server-side) */
+app.post("/auth/logout", async (req, res) => {
+  const user = await getUserFromToken(req);
+  if (user) {
+    await supabase.auth.admin.signOut(req.headers.authorization.slice(7));
+  }
+  return res.json({ message: "Logged out." });
+});
+
+/* ── POST /webhook/gumroad ── */
+app.post("/webhook/gumroad", async (req, res) => {
+  // Gumroad sends form-encoded data — parse it
+  const email = req.body?.email || req.body?.buyer?.email;
+  const permalink = req.body?.product?.permalink || req.body?.product_permalink;
+
+  console.log("Gumroad webhook received:", { email, permalink });
+
+  if (!email) {
+    return res.status(400).json({ error: "No email in webhook payload." });
+  }
+
+  // Update user to Pro in Supabase
+  const { error } = await supabase
+    .from("users")
+    .update({ is_pro: true })
+    .eq("email", email);
+
+  if (error) {
+    console.error("Webhook DB error:", error.message);
+    return res.status(500).json({ error: "DB update failed." });
+  }
+
+  console.log(`✅ Upgraded to Pro: ${email}`);
+  return res.json({ success: true });
+});
+
+
+app.get("/usage", async (req, res) => {
+  const user = await getUserFromToken(req);
+  if (!user) return res.status(401).json({ error: "Not authenticated." });
+
+  try {
+    const usage = await getOrCreateUsage(user.id);
+    return res.json({
+      count:     usage.count,
+      limit:     FREE_LIMIT,
+      remaining: Math.max(0, FREE_LIMIT - usage.count),
+      date:      usage.date,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   START
+───────────────────────────────────────────── */
 app.listen(PORT, () => {
-  console.log(`\n✅ HookLab running → http://localhost:${PORT}`);
-  console.log(`🔑 OpenRouter key: ${OPENROUTER_API_KEY ? "✓ configured" : "⚠️  NOT SET"}`);
-  console.log(`🗄️  Supabase:      ${SUPABASE_URL       ? "✓ configured" : "⚠️  NOT SET"}`);
+  console.log(`\n⚡ HookLab backend running on http://localhost:${PORT}`);
+  console.log(`   POST /generate  — AI content generation`);
+  console.log(`   POST /auth/signup  /auth/login  /auth/logout`);
+  console.log(`   GET  /usage\n`);
 });
