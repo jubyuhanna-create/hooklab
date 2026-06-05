@@ -16,7 +16,7 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 // ── تقديم الفرونتند ──
-app.use(express.static(path.join(__dirname, "frontend")));
+app.use(express.static(path.join(__dirname)));
 
 // Supabase
 const supabase = createClient(
@@ -231,7 +231,7 @@ app.get("/usage", async (req, res) => {
 
 // ── أي رابط ثاني يرجع الـ index.html ──
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "frontend", "index.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.listen(PORT, () => {
