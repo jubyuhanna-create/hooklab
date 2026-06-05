@@ -21,11 +21,7 @@ let authMode = "signin";
 // ========== Supabase Init ==========
 function initSupabase() {
   try {
-    if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL === "YOUR_SUPABASE_URL") {
-      console.warn("Supabase not configured — guest mode");
-      loadLocalUsage();
-      return;
-    }
+    supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
     supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 
