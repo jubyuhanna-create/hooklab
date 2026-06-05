@@ -20,14 +20,13 @@ app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 // ====================================================
 // ✅ المفاتيح تُقرأ من .env فقط — لا تحط أي مفتاح هنا
 // ====================================================
-const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
-const SUPABASE_URL    = process.env.SUPABASE_URL    || "";
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const OPENROUTER_API_KEY = process.env.GEMINI_API_KEY; // نفس المتغير — بس حطّ فيه مفتاح OpenRouter
+const SUPABASE_URL       = process.env.SUPABASE_URL    || "";
+const SUPABASE_ANON_KEY  = process.env.SUPABASE_ANON_KEY || "";
 
 const COOLDOWN_MS      = 10_000;
 const DAILY_USER_LIMIT = 5;
 const FP_REDUCED_LIMIT = 2;
-const GEMINI_MODEL     = "gemini-2.5-flash";
 
 const cooldowns           = new Map();
 const fingerprintAccounts = new Map();
@@ -76,7 +75,6 @@ async function antiAbuse(req, res, next) {
   const userId = user.id;
   const now    = Date.now();
 
-  // Cooldown check
   const lastReq = cooldowns.get(userId) || 0;
   const elapsed = now - lastReq;
   if (elapsed < COOLDOWN_MS) {
@@ -84,13 +82,11 @@ async function antiAbuse(req, res, next) {
     return res.status(429).json({ error: `Please wait ${wait}s before generating again.` });
   }
 
-  // Fingerprint cross-account detection
   const accounts = fingerprintAccounts.get(fingerprint) ?? new Set();
   accounts.add(userId);
   fingerprintAccounts.set(fingerprint, accounts);
   const effectiveLimit = accounts.size > 1 ? FP_REDUCED_LIMIT : DAILY_USER_LIMIT;
 
-  // Server-side usage check
   let serverUsage = 0;
   if (SUPABASE_ANON_KEY) {
     try {
@@ -116,7 +112,7 @@ async function antiAbuse(req, res, next) {
   next();
 }
 
-// ── Extract JSON from Gemini response ───────────────────────────────────────
+// ── Extract JSON ─────────────────────────────────────────────────────────────
 function extractJSON(raw) {
   if (!raw) return null;
   let text = raw.trim()
@@ -138,43 +134,25 @@ function extractJSON(raw) {
   return null;
 }
 
-// ── Call Gemini with retry ───────────────────────────────────────────────────
+// ── Call OpenRouter ───────────────────────────────────────────────────────────
 async function callGemini(prompt, retries = 2) {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${GEMINI_API_KEY}`,
-  },
-  body: JSON.stringify({
-    model: "google/gemini-2.5-flash",
-    messages: [{ role: "user", content: prompt }],
-    max_tokens: 2048,
-    temperature: 0.85,
-  }),
-});
-
-const data = await response.json();
-const rawText = data?.choices?.[0]?.message?.content || "";
-
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        },
         signal: controller.signal,
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: attempt === 0 ? 0.85 : 0.5,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 2048,
-            responseMimeType: "application/json",
-          },
+          model: "google/gemini-2.5-flash",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 2048,
+          temperature: attempt === 0 ? 0.85 : 0.5,
         }),
       });
 
@@ -182,15 +160,15 @@ const rawText = data?.choices?.[0]?.message?.content || "";
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new Error(err?.error?.message || `Gemini API error ${response.status}`);
+        throw new Error(err?.error?.message || `API error ${response.status}`);
       }
 
       const data    = await response.json();
-      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const rawText = data?.choices?.[0]?.message?.content || "";
 
       if (!rawText) {
         if (attempt < retries) continue;
-        throw new Error("Gemini returned empty response.");
+        throw new Error("Empty response from AI. Please try again.");
       }
 
       const parsed = extractJSON(rawText);
@@ -204,7 +182,7 @@ const rawText = data?.choices?.[0]?.message?.content || "";
     } catch (err) {
       clearTimeout(timeout);
       if (err.name === "AbortError") throw new Error("Request timed out. Try again.");
-      if (attempt < retries && !err.message.includes("API error")) continue;
+      if (attempt < retries) continue;
       throw err;
     }
   }
@@ -218,8 +196,8 @@ app.post("/generate", ipLimiter, antiAbuse, async (req, res) => {
     return res.status(400).json({ error: "Topic is required (min 2 characters)." });
   if (topic.length > 500)
     return res.status(400).json({ error: "Topic is too long (max 500 characters)." });
-  if (!GEMINI_API_KEY)
-    return res.status(500).json({ error: "❌ Gemini API key not configured on server." });
+  if (!OPENROUTER_API_KEY)
+    return res.status(500).json({ error: "❌ API key not configured on server." });
 
   const prompt = `You are an expert short-form video content creator for ${platform}.
 
@@ -260,6 +238,6 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n✅ HookLab running → http://localhost:${PORT}`);
-  console.log(`🔑 Gemini key: ${GEMINI_API_KEY ? "✓ configured" : "⚠️  NOT SET"}`);
-  console.log(`🗄️  Supabase:   ${SUPABASE_URL   ? "✓ configured" : "⚠️  NOT SET"}`);
+  console.log(`🔑 OpenRouter key: ${OPENROUTER_API_KEY ? "✓ configured" : "⚠️  NOT SET"}`);
+  console.log(`🗄️  Supabase:      ${SUPABASE_URL       ? "✓ configured" : "⚠️  NOT SET"}`);
 });
