@@ -261,7 +261,7 @@ async function getUsageCount() {
       return data?.count ?? 0;
     } catch (e) { return 0; }
   }
-  return getLocalUsage();
+  return getDeviceUsage();
 }
 
 async function incrementUsage() {
@@ -277,13 +277,39 @@ async function incrementUsage() {
     } catch (e) { console.warn("incrementUsage:", e.message); }
     refreshUsageBadge(); return;
   }
-  incrementLocalUsage();
+  await incrementDeviceUsage();
 }
 
 function getTodayKey() { return "hl_usage_" + new Date().toISOString().split("T")[0]; }
 function getLocalUsage() { return parseInt(localStorage.getItem(getTodayKey()) || "0", 10); }
 function incrementLocalUsage() { localStorage.setItem(getTodayKey(), String(getLocalUsage() + 1)); refreshUsageBadge(); }
 function loadLocalUsage() { refreshUsageBadge(); }
+
+function getDeviceId() {
+  let id = localStorage.getItem("hl_device_id");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("hl_device_id", id); }
+  return id;
+}
+
+async function getDeviceUsage() {
+  try {
+    const res = await fetch(`${CONFIG.BACKEND_URL}/usage/device?device_id=${getDeviceId()}`);
+    if (!res.ok) return getLocalUsage();
+    const data = await res.json();
+    return data.count ?? 0;
+  } catch { return getLocalUsage(); }
+}
+
+async function incrementDeviceUsage() {
+  try {
+    await fetch(`${CONFIG.BACKEND_URL}/usage/device`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: getDeviceId() }),
+    });
+  } catch {}
+  refreshUsageBadge();
+}
 
 async function refreshUsageBadge() {
   const count = await getUsageCount();
