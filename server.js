@@ -136,7 +136,7 @@ app.post("/generate", async (req, res) => {
         "X-Title": "HookLab",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.0-flash-001",
+        model: "google/gemini-2.5-flash",
         messages: [{ role: "user", content: buildPrompt(topic.trim(), language, style, platform) }],
         temperature: 0.9,
         max_tokens: 2048,
