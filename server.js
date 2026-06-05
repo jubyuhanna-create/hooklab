@@ -325,6 +325,29 @@ app.post("/webhook/gumroad", async (req, res) => {
 });
 
 
+/* ── GET /usage/device ── */
+app.get("/usage/device", async (req, res) => {
+  const device_id = req.query.device_id;
+  if (!device_id) return res.status(400).json({ error: "device_id required" });
+  const today = todayStr();
+  const { data } = await supabase.from("device_usage").select("count").eq("device_id", device_id).eq("date", today).maybeSingle();
+  return res.json({ count: data?.count ?? 0 });
+});
+
+/* ── POST /usage/device ── */
+app.post("/usage/device", async (req, res) => {
+  const { device_id } = req.body;
+  if (!device_id) return res.status(400).json({ error: "device_id required" });
+  const today = todayStr();
+  const { data } = await supabase.from("device_usage").select("id, count").eq("device_id", device_id).eq("date", today).maybeSingle();
+  if (data) {
+    await supabase.from("device_usage").update({ count: data.count + 1 }).eq("id", data.id);
+  } else {
+    await supabase.from("device_usage").insert({ device_id, count: 1, date: today });
+  }
+  return res.json({ ok: true });
+});
+
 app.get("/usage", async (req, res) => {
   const user = await getUserFromToken(req);
   if (!user) return res.status(401).json({ error: "Not authenticated." });
