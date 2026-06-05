@@ -6,16 +6,17 @@
 require("dotenv").config();
 const express = require("express");
 const cors    = require("cors");
+const path    = require("path");
 const { createClient } = require("@supabase/supabase-js");
 
-/* ─────────────────────────────────────────────
-   INIT
-───────────────────────────────────────────── */
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: "*" }));
 app.use(express.json());
+
+// ── تقديم الفرونتند ──
+app.use(express.static(path.join(__dirname, "frontend")));
 
 // Supabase
 const supabase = createClient(
@@ -25,9 +26,6 @@ const supabase = createClient(
 
 const FREE_LIMIT = 5;
 
-/* ─────────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────────── */
 function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
@@ -102,14 +100,10 @@ function validate(obj) {
   };
 }
 
-/* ─────────────────────────────────────────────
-   ROUTES
-───────────────────────────────────────────── */
-app.get("/", (req, res) => {
+app.get("/health", (req, res) => {
   res.json({ status: "HookLab API running", version: "2.0.0" });
 });
 
-/* ── POST /generate ── */
 app.post("/generate", async (req, res) => {
   const { topic, language, style, platform } = req.body;
   if (!topic || !topic.trim()) return res.status(400).json({ error: "Topic is required." });
@@ -132,7 +126,6 @@ app.post("/generate", async (req, res) => {
     } catch (e) { console.error("Usage check error:", e.message); }
   }
 
-  /* ── Call OpenRouter ── */
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -174,7 +167,6 @@ app.post("/generate", async (req, res) => {
   }
 });
 
-/* ── POST /auth/signup ── */
 app.post("/auth/signup", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Email and password required." });
@@ -186,7 +178,6 @@ app.post("/auth/signup", async (req, res) => {
   return res.json({ user: signIn.data.user, access_token: signIn.data.session.access_token, message: "Account created and signed in." });
 });
 
-/* ── POST /auth/login ── */
 app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Email and password required." });
@@ -195,25 +186,20 @@ app.post("/auth/login", async (req, res) => {
   return res.json({ user: data.user, access_token: data.session.access_token });
 });
 
-/* ── POST /auth/logout ── */
 app.post("/auth/logout", async (req, res) => {
   const user = await getUserFromToken(req);
   if (user) await supabase.auth.admin.signOut(req.headers.authorization.slice(7));
   return res.json({ message: "Logged out." });
 });
 
-/* ── POST /webhook/gumroad ── */
 app.post("/webhook/gumroad", async (req, res) => {
   const email = req.body?.email || req.body?.buyer?.email;
-  console.log("Gumroad webhook received:", { email });
   if (!email) return res.status(400).json({ error: "No email in webhook payload." });
   const { error } = await supabase.from("users").update({ is_pro: true }).eq("email", email);
-  if (error) { console.error("Webhook DB error:", error.message); return res.status(500).json({ error: "DB update failed." }); }
-  console.log(`✅ Upgraded to Pro: ${email}`);
+  if (error) return res.status(500).json({ error: "DB update failed." });
   return res.json({ success: true });
 });
 
-/* ── GET /usage/device ── */
 app.get("/usage/device", async (req, res) => {
   const device_id = req.query.device_id;
   if (!device_id) return res.status(400).json({ error: "device_id required" });
@@ -221,7 +207,6 @@ app.get("/usage/device", async (req, res) => {
   return res.json({ count: data?.count ?? 0 });
 });
 
-/* ── POST /usage/device ── */
 app.post("/usage/device", async (req, res) => {
   const { device_id } = req.body;
   if (!device_id) return res.status(400).json({ error: "device_id required" });
@@ -235,7 +220,6 @@ app.post("/usage/device", async (req, res) => {
   return res.json({ ok: true });
 });
 
-/* ── GET /usage ── */
 app.get("/usage", async (req, res) => {
   const user = await getUserFromToken(req);
   if (!user) return res.status(401).json({ error: "Not authenticated." });
@@ -245,9 +229,11 @@ app.get("/usage", async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-/* ─────────────────────────────────────────────
-   START
-───────────────────────────────────────────── */
+// ── أي رابط ثاني يرجع الـ index.html ──
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "frontend", "index.html"));
+});
+
 app.listen(PORT, () => {
-  console.log(`\n⚡ HookLab backend running on http://localhost:${PORT}\n`);
+  console.log(`\n⚡ HookLab running on http://localhost:${PORT}\n`);
 });
