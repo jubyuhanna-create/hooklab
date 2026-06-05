@@ -140,7 +140,22 @@ function extractJSON(raw) {
 
 // ── Call Gemini with retry ───────────────────────────────────────────────────
 async function callGemini(prompt, retries = 2) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${GEMINI_API_KEY}`,
+  },
+  body: JSON.stringify({
+    model: "google/gemini-2.5-flash",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 2048,
+    temperature: 0.85,
+  }),
+});
+
+const data = await response.json();
+const rawText = data?.choices?.[0]?.message?.content || "";
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
