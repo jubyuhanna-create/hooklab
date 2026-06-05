@@ -11,7 +11,7 @@
 const CONFIG = {
   SUPABASE_URL: "https://jkibvkgnalbxfsxwhkmq.supabase.co",
   SUPABASE_KEY: "sb_publishable_9S_ZlUlYtNKnYkpPQidGSw_Fl5x8wWU",
-  BACKEND_URL: "https://hooklab-3gzt.onrender.com/", // ← غيّر هذا بعد الـ deploy على Render
+  BACKEND_URL: "https://hooklab-3gzt.onrender.com", // ← غيّر هذا بعد الـ deploy على Render
   FREE_LIMIT: 5,
 };
 
