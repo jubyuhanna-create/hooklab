@@ -124,7 +124,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);lin
   .nav-right{gap:8px}
   .btn-upgrade{padding:7px 12px;font-size:12px}
   .btn-nav-auth{padding:7px 12px;font-size:12px}
-  .usage-badge{display:none!important}
+  .usage-badge{font-size:11px;padding:4px 8px}
   .hero{padding:60px 16px 50px}
   .hero-title{font-size:clamp(36px,10vw,52px);letter-spacing:-1px}
   .hero-sub{font-size:15px;margin-bottom:32px}
