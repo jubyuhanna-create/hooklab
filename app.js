@@ -4,7 +4,7 @@
 
 const CONFIG = {
   SUPABASE_URL: "https://jkibvkgnalbxfsxwhkmq.supabase.co",
-  SUPABASE_KEY: "sb_publishable_9S_ZlUlYtNKnYkpPQidGSw_Fl5x8wWU",
+  SUPABASE_KEY: "sb_publishable_xO4ovopvXq_AEFbSB-au1A_CKRmfGAN",
   BACKEND_URL: "https://hooklab-3gzt.onrender.com",
   FREE_LIMIT: 5,
 };
