@@ -1,30 +1,42 @@
 /* ═══════════════════════════════════════════════════════════════
-   HOOKLAB — app.js
+   HOOKLAB — app.js v3
+   ✅ لازم تسجيل دخول قبل الـ generate
+   ✅ يحفظ الـ topic بعد Sign In ويكمل تلقائياً
+   ✅ حماية من الـ abuse
 ═══════════════════════════════════════════════════════════════ */
 
 const CONFIG = {
   SUPABASE_URL: "https://jkibvkgnalbxfsxwhkmq.supabase.co",
   SUPABASE_KEY: "sb_publishable_xO4ovopvXq_AEFbSB-au1A_CKRmfGAN",
-  BACKEND_URL: "https://hooklab-3gzt.onrender.com",
-  FREE_LIMIT: 5,
+  BACKEND_URL:  "https://hooklab-3gzt.onrender.com",
+  FREE_LIMIT:   5,
 };
 
 let supabaseClient = null;
-let currentUser = null;
-let authMode = "signin";
+let currentUser    = null;
+let authMode       = "signin";
+let pendingGenerate = false; // عشان نكمل الـ generate بعد الـ sign in
 
-// ========== Supabase Init ==========
+// ═══════════════ SUPABASE INIT ═══════════════
 function initSupabase() {
   try {
     supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
-    supabaseClient.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session?.user) setUser(session.user);
-      else if (event === "SIGNED_OUT") clearUser();
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_IN" && session?.user) {
+        await setUser(session.user);
+        // لو كان عم يحاول يعمل generate قبل ما يسجل → كمّل تلقائياً
+        if (pendingGenerate) {
+          pendingGenerate = false;
+          closeModal("auth-modal");
+          setTimeout(() => handleGenerate(), 300);
+        }
+      } else if (event === "SIGNED_OUT") {
+        clearUser();
+      }
     });
     checkSession();
   } catch (e) {
     console.error("Supabase error:", e);
-    loadLocalUsage();
   }
 }
 
@@ -32,27 +44,25 @@ async function checkSession() {
   if (!supabaseClient) return;
   try {
     const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session?.user) setUser(session.user);
-    else loadLocalUsage();
-  } catch (e) { loadLocalUsage(); }
+    if (session?.user) await setUser(session.user);
+    else refreshUsageBadge();
+  } catch (e) { refreshUsageBadge(); }
 }
 
-// ========== Google Sign In ==========
+// ═══════════════ GOOGLE SIGN IN ═══════════════
 async function signInWithGoogle() {
-  if (!supabaseClient) return;
+  if (!supabaseClient) { showToast("❌ Auth not ready."); return; }
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },
     });
     if (error) showToast("❌ " + error.message);
-  } catch (e) {
-    showToast("❌ " + e.message);
-  }
+  } catch (e) { showToast("❌ " + e.message); }
 }
 
-// ========== User State ==========
-function setUser(user) {
+// ═══════════════ USER STATE ═══════════════
+async function setUser(user) {
   currentUser = user;
   const btn = document.getElementById("auth-btn");
   if (btn) {
@@ -60,8 +70,8 @@ function setUser(user) {
     btn.textContent = `👤 ${name}`;
     btn.onclick = showUserMenu;
   }
-  refreshUsageBadge();
-  ensureUserRecord(user);
+  await ensureUserRecord(user);
+  await refreshUsageBadge();
 }
 
 function clearUser() {
@@ -80,9 +90,9 @@ async function signOut() {
 function showUserMenu() {
   let existing = document.getElementById("user-dropdown");
   if (existing) { existing.remove(); return; }
-  const name = currentUser?.user_metadata?.name || currentUser?.email?.split("@")[0] || "User";
+  const name  = currentUser?.user_metadata?.name || currentUser?.email?.split("@")[0] || "User";
   const email = currentUser?.email || "";
-  const menu = document.createElement("div");
+  const menu  = document.createElement("div");
   menu.id = "user-dropdown";
   menu.style.cssText = "position:fixed;top:62px;right:20px;background:#18181f;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:16px;z-index:500;min-width:200px;box-shadow:0 8px 40px rgba(0,0,0,0.5)";
   menu.innerHTML = `
@@ -101,7 +111,7 @@ function showUserMenu() {
   }, 100);
 }
 
-// ========== Auth Modal ==========
+// ═══════════════ AUTH MODAL ═══════════════
 function openAuthModal(mode = "signin") {
   authMode = mode;
   updateAuthModalUI();
@@ -112,14 +122,14 @@ function toggleAuth() { openAuthModal("signin"); }
 
 function updateAuthModalUI() {
   const isSignup = authMode === "signup";
-  const titleEl = document.getElementById("auth-title");
-  const subEl = document.getElementById("auth-sub");
+  const titleEl  = document.getElementById("auth-title");
+  const subEl    = document.getElementById("auth-sub");
   if (titleEl) titleEl.textContent = isSignup ? "🚀 Join HookLab Free" : "👋 Welcome Back";
-  if (subEl) subEl.textContent = isSignup
+  if (subEl)   subEl.textContent   = isSignup
     ? "Create your free account — 5 generations/day included."
-    : "Sign in to access your account.";
+    : "Sign in to generate content.";
 
-  let nameField = document.getElementById("auth-name-field");
+  let nameField   = document.getElementById("auth-name-field");
   const emailField = document.getElementById("auth-email")?.parentElement;
   if (isSignup && !nameField && emailField) {
     nameField = document.createElement("div");
@@ -150,17 +160,17 @@ function switchAuthMode() {
 }
 
 async function submitAuth() {
-  const email = document.getElementById("auth-email").value.trim();
+  const email    = document.getElementById("auth-email").value.trim();
   const password = document.getElementById("auth-password").value;
-  const name = document.getElementById("auth-name")?.value?.trim() || "";
+  const name     = document.getElementById("auth-name")?.value?.trim() || "";
 
   const errEl = document.getElementById("auth-error");
   if (errEl) errEl.classList.add("hidden");
 
-  if (!email || !password) { showAuthError("Please fill all fields."); return; }
-  if (authMode === "signup" && !name) { showAuthError("Please enter your name."); return; }
-  if (password.length < 6) { showAuthError("Password must be at least 6 characters."); return; }
-  if (!supabaseClient) { showAuthError("Auth service not configured."); return; }
+  if (!email || !password)                  { showAuthError("Please fill all fields."); return; }
+  if (authMode === "signup" && !name)       { showAuthError("Please enter your name."); return; }
+  if (password.length < 6)                  { showAuthError("Password must be at least 6 characters."); return; }
+  if (!supabaseClient)                      { showAuthError("Auth service not configured."); return; }
 
   const btn = document.querySelector("#auth-modal .btn-generate");
   if (btn) { btn.disabled = true; btn.textContent = "Please wait..."; }
@@ -177,14 +187,19 @@ async function submitAuth() {
     const user = result.data?.user;
     if (!user || !result.data?.session) {
       closeModal("auth-modal");
+      pendingGenerate = false;
       showConfirmEmailModal(name || email.split("@")[0]);
       return;
     }
 
     if (authMode === "signup") await ensureUserRecord(user, name);
-    setUser(user);
-    closeModal("auth-modal");
-    showWelcomeModal(name || user.user_metadata?.name || user.email?.split("@")[0]);
+    await setUser(user);
+
+    // لو كان pending generate → onAuthStateChange بيكمله
+    if (!pendingGenerate) {
+      closeModal("auth-modal");
+      showWelcomeModal(name || user.user_metadata?.name || user.email?.split("@")[0]);
+    }
 
   } catch (e) {
     showAuthError(e.message);
@@ -201,7 +216,7 @@ function showAuthError(msg) {
   if (el) { el.textContent = msg; el.classList.remove("hidden"); }
 }
 
-// ========== Welcome Modal ==========
+// ═══════════════ WELCOME / CONFIRM MODALS ═══════════════
 function showWelcomeModal(name) {
   let modal = document.getElementById("welcome-modal");
   if (!modal) { modal = document.createElement("div"); modal.id = "welcome-modal"; modal.className = "modal-overlay"; document.body.appendChild(modal); }
@@ -211,15 +226,21 @@ function showWelcomeModal(name) {
       <div style="font-size:52px;margin-bottom:8px">🎉</div>
       <h2 style="font-family:'Syne',sans-serif;font-size:28px;margin-bottom:8px">Welcome, ${name}!</h2>
       <p style="color:#7a7a94;margin-bottom:24px;font-size:15px">You're all set. Start creating viral content! 🔥</p>
-      <button class="btn-generate" style="width:100%;margin-bottom:10px" onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';document.getElementById('topic').focus()">⚡ Start Generating Now</button>
-      <button onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';window.open('https://jubyanna.gumroad.com/l/HOOKLAB','_blank')" style="background:none;border:1px solid rgba(255,255,255,0.1);color:#7a7a94;width:100%;padding:12px;border-radius:12px;cursor:pointer;font-size:14px">✦ Upgrade to Pro</button>
+      <button class="btn-generate" style="width:100%;margin-bottom:10px"
+        onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';document.getElementById('topic').focus()">
+        ⚡ Start Generating Now
+      </button>
+      <button onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';window.open('https://jubyanna.gumroad.com/l/HOOKLAB','_blank')"
+        style="background:none;border:1px solid rgba(255,255,255,0.1);color:#7a7a94;width:100%;padding:12px;border-radius:12px;cursor:pointer;font-size:14px">
+        ✦ Upgrade to Pro
+      </button>
     </div>
   `;
   document.body.style.overflow = "hidden";
   modal.addEventListener("click", (e) => { if (e.target === modal) { modal.remove(); document.body.style.overflow = ""; } });
 }
 
-function showConfirmEmailModal(name) {
+function showConfirmEmailModal() {
   let modal = document.getElementById("welcome-modal");
   if (!modal) { modal = document.createElement("div"); modal.id = "welcome-modal"; modal.className = "modal-overlay"; document.body.appendChild(modal); }
   modal.classList.remove("hidden");
@@ -228,13 +249,16 @@ function showConfirmEmailModal(name) {
       <div style="font-size:48px;margin-bottom:16px">📧</div>
       <h2 style="font-family:'Syne',sans-serif;margin-bottom:10px">Check Your Email</h2>
       <p style="color:#7a7a94;margin-bottom:20px">We sent a confirmation link. Click it, then come back and sign in.</p>
-      <button class="btn-generate" style="width:100%" onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';openAuthModal('signin')">→ Go to Sign In</button>
+      <button class="btn-generate" style="width:100%"
+        onclick="document.getElementById('welcome-modal').remove();document.body.style.overflow='';openAuthModal('signin')">
+        → Go to Sign In
+      </button>
     </div>
   `;
   document.body.style.overflow = "hidden";
 }
 
-// ========== Supabase DB ==========
+// ═══════════════ SUPABASE DB ═══════════════
 async function ensureUserRecord(user, name = "") {
   if (!supabaseClient) return;
   try {
@@ -250,106 +274,96 @@ async function ensureUserRecord(user, name = "") {
 }
 
 async function getUsageCount() {
-  if (supabaseClient && currentUser) {
-    try {
-      const today = new Date().toISOString().split("T")[0];
-      const { data } = await supabaseClient.from("usage").select("count").eq("user_id", currentUser.id).eq("date", today).maybeSingle();
-      return data?.count ?? 0;
-    } catch { return 0; }
-  }
-  return getDeviceUsage();
-}
-
-async function incrementUsage() {
-  if (supabaseClient && currentUser) {
-    try {
-      const today = new Date().toISOString().split("T")[0];
-      const { data } = await supabaseClient.from("usage").select("id, count").eq("user_id", currentUser.id).eq("date", today).maybeSingle();
-      if (data) {
-        await supabaseClient.from("usage").update({ count: data.count + 1 }).eq("id", data.id);
-      } else {
-        await supabaseClient.from("usage").insert({ user_id: currentUser.id, count: 1, date: today });
-      }
-    } catch (e) { console.warn("incrementUsage:", e.message); }
-    refreshUsageBadge(); return;
-  }
-  await incrementDeviceUsage();
-}
-
-function getTodayKey() { return "hl_usage_" + new Date().toISOString().split("T")[0]; }
-function getLocalUsage() { return parseInt(localStorage.getItem(getTodayKey()) || "0", 10); }
-function loadLocalUsage() { refreshUsageBadge(); }
-
-function getDeviceId() {
-  let id = localStorage.getItem("hl_device_id");
-  if (!id) { id = crypto.randomUUID(); localStorage.setItem("hl_device_id", id); }
-  return id;
-}
-
-async function getDeviceUsage() {
+  if (!supabaseClient || !currentUser) return 0;
   try {
-    const res = await fetch(`${CONFIG.BACKEND_URL}/usage/device?device_id=${getDeviceId()}`);
-    if (!res.ok) return getLocalUsage();
-    const data = await res.json();
-    return data.count ?? 0;
-  } catch { return getLocalUsage(); }
-}
-
-async function incrementDeviceUsage() {
-  try {
-    await fetch(`${CONFIG.BACKEND_URL}/usage/device`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: getDeviceId() }),
-    });
-  } catch {}
-  refreshUsageBadge();
+    const today = new Date().toISOString().split("T")[0];
+    const { data } = await supabaseClient.from("usage").select("count")
+      .eq("user_id", currentUser.id).eq("date", today).maybeSingle();
+    return data?.count ?? 0;
+  } catch { return 0; }
 }
 
 async function refreshUsageBadge() {
-  const count = await getUsageCount();
-  const left = Math.max(0, CONFIG.FREE_LIMIT - count);
-  const badge = document.getElementById("usage-badge");
+  const badge     = document.getElementById("usage-badge");
   const usesLeftEl = document.getElementById("uses-left");
+
+  if (!currentUser) {
+    if (badge) badge.classList.add("hidden");
+    if (usesLeftEl) usesLeftEl.textContent = CONFIG.FREE_LIMIT;
+    return;
+  }
+
+  const count = await getUsageCount();
+  const left  = Math.max(0, CONFIG.FREE_LIMIT - count);
   if (badge) { badge.textContent = `${left} generations left today`; badge.classList.remove("hidden"); }
   if (usesLeftEl) usesLeftEl.textContent = left;
 }
 
-// ========== Generate ==========
+// ═══════════════ GENERATE ═══════════════
 async function handleGenerate() {
-  const topic = document.getElementById("topic").value.trim();
+  const topic    = document.getElementById("topic").value.trim();
   const language = document.getElementById("language").value;
-  const style = document.getElementById("style").value;
+  const style    = document.getElementById("style").value;
   const platform = document.getElementById("platform").value;
 
-  if (!topic) { showToast("⚠️ Please enter a topic first!"); document.getElementById("topic").focus(); return; }
+  if (!topic) {
+    showToast("⚠️ Please enter a topic first!");
+    document.getElementById("topic").focus();
+    return;
+  }
 
-  if (supabaseClient && currentUser) {
-    const usageCount = await getUsageCount();
-    if (usageCount >= CONFIG.FREE_LIMIT) {
-      window.open("https://jubyanna.gumroad.com/l/HOOKLAB", "_blank");
-      showToast("🚫 Daily limit reached — Upgrade to Pro!");
-      return;
-    }
+  // لو مش مسجل دخول → فتح modal وحفظ الـ topic
+  if (!currentUser) {
+    pendingGenerate = true;
+    showToast("👋 Please sign in first to generate content.");
+    openAuthModal("signin");
+    return;
+  }
+
+  // تحقق من الـ limit قبل الإرسال
+  const usageCount = await getUsageCount();
+  if (usageCount >= CONFIG.FREE_LIMIT) {
+    showToast("🚫 Daily limit reached — Upgrade to Pro!");
+    window.open("https://jubyanna.gumroad.com/l/HOOKLAB", "_blank");
+    return;
   }
 
   setLoading(true);
   try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error("Session expired. Please sign in again.");
+
     const res = await fetch(`${CONFIG.BACKEND_URL}/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
       body: JSON.stringify({ topic, language, style, platform }),
     });
 
+    const data = await res.json();
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error || `Server error ${res.status}`);
+      // لو الـ server رجع AUTH_REQUIRED
+      if (data.code === "AUTH_REQUIRED") {
+        pendingGenerate = true;
+        openAuthModal("signin");
+        return;
+      }
+      // لو وصل الـ limit
+      if (data.code === "LIMIT_REACHED") {
+        showToast("🚫 Daily limit reached — Upgrade to Pro!");
+        window.open("https://jubyanna.gumroad.com/l/HOOKLAB", "_blank");
+        return;
+      }
+      throw new Error(data.error || `Server error ${res.status}`);
     }
 
-    const data = await res.json();
     if (!Array.isArray(data.hooks)) throw new Error("Invalid AI response. Please try again.");
 
-    await incrementUsage();
+    await refreshUsageBadge();
     renderOutput(data);
     scrollToOutput();
 
@@ -363,12 +377,13 @@ async function handleGenerate() {
 
 function setLoading(on) {
   const btn = document.getElementById("generate-btn");
+  if (!btn) return;
   btn.disabled = on;
   btn.querySelector(".btn-text").classList.toggle("hidden", on);
   btn.querySelector(".btn-loader").classList.toggle("hidden", !on);
 }
 
-// ========== Render ==========
+// ═══════════════ RENDER ═══════════════
 function renderOutput({ hooks, script, caption }) {
   document.getElementById("hooks-list").innerHTML = hooks.map((h, i) =>
     `<li><span class="hook-num">${i + 1}</span><span>${escapeHtml(h)}</span></li>`
@@ -383,12 +398,12 @@ function scrollToOutput() {
   setTimeout(() => document.getElementById("output-section").scrollIntoView({ behavior: "smooth", block: "start" }), 100);
 }
 
-// ========== Copy ==========
+// ═══════════════ COPY ═══════════════
 function copyHooks() {
   const items = [...document.querySelectorAll("#hooks-list li")];
   copyToClipboard(items.map((li, i) => `${i + 1}. ${li.querySelector("span:last-child").textContent}`).join("\n"), "Hooks copied! ✓");
 }
-function copyScript() { copyToClipboard(document.getElementById("script-text").textContent, "Script copied! ✓"); }
+function copyScript()  { copyToClipboard(document.getElementById("script-text").textContent, "Script copied! ✓"); }
 function copyCaption() { copyToClipboard(document.getElementById("caption-text").textContent, "Caption copied! ✓"); }
 function copyAll() {
   const hooks = [...document.querySelectorAll("#hooks-list li")].map((li, i) => `${i + 1}. ${li.querySelector("span:last-child").textContent}`).join("\n");
@@ -404,31 +419,43 @@ function fallbackCopy(text, msg) {
   showToast(msg);
 }
 
-// ========== Modals ==========
-function openModal(id) { document.getElementById(id)?.classList.remove("hidden"); document.body.style.overflow = "hidden"; }
-function closeModal(id) { document.getElementById(id)?.classList.add("hidden"); document.body.style.overflow = ""; }
+// ═══════════════ MODALS ═══════════════
+function openModal(id)  { document.getElementById(id)?.classList.remove("hidden"); document.body.style.overflow = "hidden"; }
+function closeModal(id) { document.getElementById(id)?.classList.add("hidden");    document.body.style.overflow = ""; }
 function showUpgradeModal() { window.open("https://jubyanna.gumroad.com/l/HOOKLAB", "_blank"); }
 
-document.addEventListener("click", (e) => { if (e.target.classList.contains("modal-overlay")) closeModal(e.target.id); });
+document.addEventListener("click", (e) => {
+  if (e.target.classList.contains("modal-overlay")) {
+    pendingGenerate = false;
+    closeModal(e.target.id);
+  }
+});
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeModal("auth-modal"); }
+  if (e.key === "Escape") { pendingGenerate = false; closeModal("auth-modal"); }
   if (e.key === "Enter" && !document.getElementById("auth-modal")?.classList.contains("hidden")) submitAuth();
 });
 
-// ========== Toast ==========
+// ═══════════════ TOAST ═══════════════
 let toastTimer = null;
 function showToast(msg) {
   const toast = document.getElementById("toast");
   toast.textContent = msg; toast.classList.remove("hidden");
   void toast.offsetWidth; toast.classList.add("show");
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.classList.add("hidden"), 400); }, 3000);
+  toastTimer = setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.classList.add("hidden"), 400); }, 3500);
 }
 
-// ========== Helpers ==========
-function escapeHtml(str) { const d = document.createElement("div"); d.appendChild(document.createTextNode(str)); return d.innerHTML; }
+// ═══════════════ HELPERS ═══════════════
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.appendChild(document.createTextNode(str));
+  return d.innerHTML;
+}
+function scrollToPricing() {
+  document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+}
 
-// ========== Init ==========
+// ═══════════════ INIT ═══════════════
 document.addEventListener("DOMContentLoaded", () => {
   const authBtn = document.getElementById("auth-btn");
   if (authBtn) authBtn.onclick = () => openAuthModal("signin");
@@ -436,7 +463,4 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("topic")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleGenerate(); }
   });
-  // لما يجي من Gumroad بعد الشراء
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("upgrade") === "true") openAuthModal("signup");
 });
