@@ -1,6 +1,6 @@
 /**
- * HookLab — Backend Server
- * Node.js + Express + OpenRouter + Supabase
+ * HookLab — Backend Server v3
+ * حماية كاملة: لازم تسجيل دخول للـ generate + rate limiting + anti-abuse
  */
 
 require("dotenv").config();
@@ -12,13 +12,12 @@ const { createClient } = require("@supabase/supabase-js");
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+app.set("trust proxy", 1);
 app.use(cors({ origin: "*" }));
 app.use(express.json());
-
-// ── تقديم الفرونتند ──
 app.use(express.static(path.join(__dirname)));
 
-// Supabase
+// ── Supabase ──
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -26,12 +25,19 @@ const supabase = createClient(
 
 const FREE_LIMIT = 5;
 
+// ── في الذاكرة: cooldown + IP tracking ──
+const cooldowns   = new Map(); // userId → timestamp
+const ipRequests  = new Map(); // IP → { count, date }
+const COOLDOWN_MS = 8000;      // 8 ثوانٍ بين كل generate
+const IP_MAX      = 30;        // أقصى عدد generate لكل IP باليوم
+
 function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
 
+// ── تحقق من الـ token وأرجع المستخدم ──
 async function getUserFromToken(req) {
-  const auth = req.headers.authorization || "";
+  const auth  = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
   if (!token) return null;
   try {
@@ -41,6 +47,7 @@ async function getUserFromToken(req) {
   } catch { return null; }
 }
 
+// ── usage helpers ──
 async function getOrCreateUsage(userId) {
   const today = todayStr();
   let { data, error } = await supabase
@@ -54,6 +61,28 @@ async function getOrCreateUsage(userId) {
   return data;
 }
 
+async function incrementUsageDB(userId) {
+  try {
+    await supabase.rpc("increment_usage", { p_user_id: userId, p_date: todayStr() });
+  } catch (e) { console.error("increment_usage error:", e.message); }
+}
+
+// ── IP rate limiter (بدون مكتبة خارجية) ──
+function checkIPLimit(req) {
+  const ip    = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  const today = todayStr();
+  const entry = ipRequests.get(ip);
+
+  if (!entry || entry.date !== today) {
+    ipRequests.set(ip, { count: 1, date: today });
+    return true;
+  }
+  if (entry.count >= IP_MAX) return false;
+  entry.count++;
+  return true;
+}
+
+// ── Prompt builder ──
 function buildPrompt(topic, language, style, platform) {
   return `You are an expert viral content creator for ${platform || "TikTok"}.
 
@@ -100,32 +129,74 @@ function validate(obj) {
   };
 }
 
-app.get("/health", (req, res) => {
-  res.json({ status: "HookLab API running", version: "2.0.0" });
-});
+// ════════════════════════════════════════════
+//  ROUTES
+// ════════════════════════════════════════════
 
+app.get("/health", (_, res) => res.json({ status: "ok", version: "3.0.0" }));
+
+// ── POST /generate ── محمي بالكامل ──
 app.post("/generate", async (req, res) => {
   const { topic, language, style, platform } = req.body;
-  if (!topic || !topic.trim()) return res.status(400).json({ error: "Topic is required." });
 
+  // 1. تحقق من الـ topic
+  if (!topic || !topic.trim() || topic.trim().length < 2)
+    return res.status(400).json({ error: "Topic is required (min 2 chars)." });
+  if (topic.length > 500)
+    return res.status(400).json({ error: "Topic too long (max 500 chars)." });
+
+  // 2. لازم يكون مسجل دخول
   const user = await getUserFromToken(req);
-
-  if (user) {
-    try {
-      const { data: userRow } = await supabase.from("users").select("is_pro").eq("id", user.id).single();
-      const isPro = userRow?.is_pro === true;
-      if (!isPro) {
-        const usage = await getOrCreateUsage(user.id);
-        if (usage.count >= FREE_LIMIT) {
-          return res.status(429).json({
-            error: "Daily limit reached. Upgrade to Pro for unlimited generations.",
-            limit: FREE_LIMIT, used: usage.count,
-          });
-        }
-      }
-    } catch (e) { console.error("Usage check error:", e.message); }
+  if (!user) {
+    return res.status(401).json({
+      error: "Please sign in to generate content.",
+      code: "AUTH_REQUIRED"
+    });
   }
 
+  // 3. IP rate limit
+  if (!checkIPLimit(req)) {
+    return res.status(429).json({ error: "Too many requests from your network. Try again tomorrow." });
+  }
+
+  // 4. Cooldown بين الـ generates
+  const now     = Date.now();
+  const lastReq = cooldowns.get(user.id) || 0;
+  const elapsed = now - lastReq;
+  if (elapsed < COOLDOWN_MS) {
+    const wait = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+    return res.status(429).json({ error: `Please wait ${wait}s before generating again.` });
+  }
+
+  // 5. تحقق إذا Pro أو Free limit
+  try {
+    const { data: userRow } = await supabase
+      .from("users").select("is_pro, pro_expires_at").eq("id", user.id).single();
+
+    const isPro = userRow?.is_pro === true &&
+      userRow?.pro_expires_at &&
+      new Date(userRow.pro_expires_at) > new Date();
+
+    if (!isPro) {
+      const usage = await getOrCreateUsage(user.id);
+      if (usage.count >= FREE_LIMIT) {
+        return res.status(429).json({
+          error: "Daily limit reached. Upgrade to Pro for unlimited generations.",
+          code: "LIMIT_REACHED",
+          limit: FREE_LIMIT,
+          used: usage.count,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Usage check error:", e.message);
+    // لا توقف الـ generation بسبب DB error
+  }
+
+  // 6. سجّل الـ cooldown
+  cooldowns.set(user.id, now);
+
+  // 7. استدعِ OpenRouter
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -148,92 +219,62 @@ app.post("/generate", async (req, res) => {
       throw new Error(err?.error?.message || `OpenRouter error ${response.status}`);
     }
 
-    const data = await response.json();
+    const data    = await response.json();
     const rawText = data.choices?.[0]?.message?.content;
     if (!rawText) throw new Error("Empty response from AI.");
     const parsed = parseResponse(rawText);
 
-    if (user) {
-      try {
-        await supabase.rpc("increment_usage", { p_user_id: user.id, p_date: todayStr() });
-      } catch (e) { console.error("Usage increment error:", e.message); }
-    }
+    // زد الـ usage بعد نجاح الـ generate
+    await incrementUsageDB(user.id);
 
     return res.json(parsed);
 
   } catch (err) {
-    console.error("OpenRouter error:", err.message);
+    console.error("Generate error:", err.message);
     return res.status(500).json({ error: err.message || "Generation failed. Try again." });
   }
 });
 
-app.post("/auth/signup", async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: "Email and password required." });
-  const { data, error } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
-  if (error) return res.status(400).json({ error: error.message });
-  const signIn = await supabase.auth.signInWithPassword({ email, password });
-  if (signIn.error) return res.status(400).json({ error: signIn.error.message });
-  await supabase.from("users").upsert({ id: data.user.id, email }, { onConflict: "id" });
-  return res.json({ user: signIn.data.user, access_token: signIn.data.session.access_token, message: "Account created and signed in." });
-});
-
-app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: "Email and password required." });
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) return res.status(401).json({ error: error.message });
-  return res.json({ user: data.user, access_token: data.session.access_token });
-});
-
-app.post("/auth/logout", async (req, res) => {
-  const user = await getUserFromToken(req);
-  if (user) await supabase.auth.admin.signOut(req.headers.authorization.slice(7));
-  return res.json({ message: "Logged out." });
-});
-
-app.post("/webhook/gumroad", async (req, res) => {
-  const email = req.body?.email || req.body?.buyer?.email;
-  if (!email) return res.status(400).json({ error: "No email in webhook payload." });
-  const { error } = await supabase.from("users").update({ is_pro: true }).eq("email", email);
-  if (error) return res.status(500).json({ error: "DB update failed." });
-  return res.json({ success: true });
-});
-
-app.get("/usage/device", async (req, res) => {
-  const device_id = req.query.device_id;
-  if (!device_id) return res.status(400).json({ error: "device_id required" });
-  const { data } = await supabase.from("device_usage").select("count").eq("device_id", device_id).eq("date", todayStr()).maybeSingle();
-  return res.json({ count: data?.count ?? 0 });
-});
-
-app.post("/usage/device", async (req, res) => {
-  const { device_id } = req.body;
-  if (!device_id) return res.status(400).json({ error: "device_id required" });
-  const today = todayStr();
-  const { data } = await supabase.from("device_usage").select("id, count").eq("device_id", device_id).eq("date", today).maybeSingle();
-  if (data) {
-    await supabase.from("device_usage").update({ count: data.count + 1 }).eq("id", data.id);
-  } else {
-    await supabase.from("device_usage").insert({ device_id, count: 1, date: today });
-  }
-  return res.json({ ok: true });
-});
-
+// ── GET /usage ──
 app.get("/usage", async (req, res) => {
   const user = await getUserFromToken(req);
   if (!user) return res.status(401).json({ error: "Not authenticated." });
   try {
     const usage = await getOrCreateUsage(user.id);
-    return res.json({ count: usage.count, limit: FREE_LIMIT, remaining: Math.max(0, FREE_LIMIT - usage.count), date: usage.date });
+    return res.json({
+      count: usage.count,
+      limit: FREE_LIMIT,
+      remaining: Math.max(0, FREE_LIMIT - usage.count),
+      date: usage.date,
+    });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-// ── أي رابط ثاني يرجع الـ index.html ──
+// ── POST /webhook/gumroad ── لما حدا يدفع يصير Pro ──
+app.post("/webhook/gumroad", express.urlencoded({ extended: true }), async (req, res) => {
+  const email = req.body?.email;
+  if (!email) return res.status(400).json({ error: "No email." });
+
+  const expiresAt = new Date();
+  expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+  const { error } = await supabase
+    .from("users")
+    .update({ is_pro: true, pro_expires_at: expiresAt.toISOString() })
+    .eq("email", email);
+
+  if (error) return res.status(500).json({ error: "DB update failed." });
+  console.log(`✅ Pro activated: ${email}`);
+  return res.json({ success: true });
+});
+
+// ── Fallback ──
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.listen(PORT, () => {
-  console.log(`\n⚡ HookLab running on http://localhost:${PORT}\n`);
+  console.log(`\n⚡ HookLab running on http://localhost:${PORT}`);
+  console.log(`🔑 OpenRouter: ${process.env.OPENROUTER_API_KEY ? "✓" : "⚠️ NOT SET"}`);
+  console.log(`🗄️  Supabase:  ${process.env.SUPABASE_URL ? "✓" : "⚠️ NOT SET"}\n`);
 });
