@@ -67,7 +67,7 @@
             <span class="btn-text">⚡ Generate Content</span>
             <span class="btn-loader hidden"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
           </button>
-          <p class="free-note">Free: <strong id="uses-left">5</strong> generations/day · <a href="#" onclick="showUpgradeModal()">Upgrade for unlimited</a></p>
+          <p class="free-note">Free: <strong id="uses-left">5</strong> generations/day · <a href="#pricing" onclick="scrollToPricing()">Upgrade for unlimited</a></p>
         </div>
       </div>
     </div>
@@ -94,6 +94,75 @@
     </div>
   </section>
 
+  <!-- PRICING SECTION -->
+  <section class="pricing-section" id="pricing">
+    <div class="pricing-glow"></div>
+    <div class="pricing-header">
+      <div class="badge-pill">💎 Simple Pricing</div>
+      <h2 class="section-title" style="margin-top:20px">Start Free. Go Pro When Ready.</h2>
+      <p class="pricing-sub">No credit card needed to start. Upgrade when you need more.</p>
+    </div>
+
+    <div class="pricing-grid">
+
+      <!-- FREE -->
+      <div class="pricing-card">
+        <div class="plan-name">Free</div>
+        <div class="plan-price"><span class="plan-amount">$0</span><span class="plan-per">/forever</span></div>
+        <p class="plan-desc">Perfect for trying it out.</p>
+        <ul class="plan-features">
+          <li><span class="feat-check">✓</span> 5 generations per day</li>
+          <li><span class="feat-check">✓</span> All languages & styles</li>
+          <li><span class="feat-check">✓</span> TikTok, Reels & Shorts</li>
+          <li><span class="feat-check feat-x">✗</span> Unlimited generations</li>
+          <li><span class="feat-check feat-x">✗</span> Priority AI</li>
+        </ul>
+        <button class="btn-plan-free" onclick="document.getElementById('topic').scrollIntoView({behavior:'smooth'})">Start for Free →</button>
+      </div>
+
+      <!-- PRO -->
+      <div class="pricing-card pricing-card-pro">
+        <div class="plan-badge">Most Popular ✦</div>
+        <div class="plan-name">Pro</div>
+        <div class="plan-price"><span class="plan-amount">$9</span><span class="plan-per">/month</span></div>
+        <p class="plan-desc">For serious content creators.</p>
+        <ul class="plan-features">
+          <li><span class="feat-check">✓</span> <strong>Unlimited</strong> generations</li>
+          <li><span class="feat-check">✓</span> All languages & styles</li>
+          <li><span class="feat-check">✓</span> TikTok, Reels & Shorts</li>
+          <li><span class="feat-check">✓</span> Priority AI generation</li>
+          <li><span class="feat-check">✓</span> Early access to new features</li>
+        </ul>
+        <button class="btn-plan-pro" onclick="showUpgradeModal()">Get Pro — $9/mo ⚡</button>
+        <p class="plan-note">Cancel anytime · Secure payment</p>
+      </div>
+
+    </div>
+
+    <!-- FAQ -->
+    <div class="faq-section">
+      <h3 class="faq-title">Frequently Asked Questions</h3>
+      <div class="faq-grid">
+        <div class="faq-item">
+          <div class="faq-q">What counts as a generation?</div>
+          <div class="faq-a">One generation = 10 hooks + full script + caption. Free users get 5 per day.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">Can I cancel anytime?</div>
+          <div class="faq-a">Yes, cancel anytime from your account. No hidden fees or commitments.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">What languages are supported?</div>
+          <div class="faq-a">English + Arabic dialects: Fusha, Egyptian, Levantine, Gulf, and Moroccan.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">Is there a free trial for Pro?</div>
+          <div class="faq-a">The free plan lets you try all features with 5 generations/day — no card needed.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- AUTH MODAL -->
   <div class="modal-overlay hidden" id="auth-modal">
     <div class="modal">
@@ -101,36 +170,15 @@
       <div class="modal-icon">⚡</div>
       <h2 id="auth-title">Welcome Back</h2>
       <p id="auth-sub">Sign in to track your daily usage.</p>
-
-      <!-- ✅ Google Sign-In Button -->
-      <button id="google-signin-btn" onclick="signInWithGoogle()" style="
-        width:100%;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        gap:10px;
-        background:#fff;
-        color:#1f1f1f;
-        border:none;
-        border-radius:10px;
-        padding:13px 16px;
-        font-size:15px;
-        font-weight:600;
-        cursor:pointer;
-        margin-bottom:18px;
-        transition:opacity .2s;
-      " onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
-        <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.35-8.16 2.35-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
+      <button id="google-signin-btn" onclick="signInWithGoogle()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#1f1f1f;border:none;border-radius:10px;padding:13px 16px;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:18px;transition:opacity .2s" onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
+        <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.35-8.16 2.35-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
         Continue with Google
       </button>
-
-      <!-- Divider -->
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
         <div style="flex:1;height:1px;background:rgba(255,255,255,0.07)"></div>
         <span style="color:#7a7a94;font-size:12px">or continue with email</span>
         <div style="flex:1;height:1px;background:rgba(255,255,255,0.07)"></div>
       </div>
-
       <div class="field-group"><label>Email</label><input type="email" id="auth-email" placeholder="you@example.com"/></div>
       <div class="field-group"><label>Password</label><input type="password" id="auth-password" placeholder="••••••••"/></div>
       <button class="btn-generate" style="width:100%;margin-top:8px" onclick="submitAuth()">Sign In</button>
@@ -139,21 +187,21 @@
     </div>
   </div>
 
-  <!-- UPGRADE MODAL -->
-  <div class="modal-overlay hidden" id="upgrade-modal">
-    <div class="modal upgrade-modal"><button class="modal-close" onclick="closeModal('upgrade-modal')">✕</button><div class="modal-icon upgrade-icon">✦</div>
-      <h2>Upgrade to Pro</h2><p>Unlock unlimited generations, priority AI, and premium content styles.</p>
-      <ul class="pro-features"><li>✅ Unlimited generations per day</li><li>✅ All languages & styles</li><li>✅ Priority AI generation</li><li>✅ Export to PDF & Notion</li><li>✅ Analytics dashboard</li></ul>
-      <div class="price-row"><span class="price-amount">$9</span><span class="price-per">/month</span></div>
-      <button class="btn-pro-cta" onclick="alert('Payment coming soon via Lemon Squeezy! 🍋')">🍋 Get Pro — $9/mo</button>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px">Cancel anytime · Secure payment via Lemon Squeezy</p>
-    </div>
-  </div>
-
   <div class="toast hidden" id="toast"></div>
-  <footer class="footer"><div class="footer-brand">⚡ HookLab</div><p>AI-powered content for creators who don't have time to think twice.</p><p class="footer-copy">© 2025 HookLab · Built with Claude AI</p></footer>
+
+  <footer class="footer">
+    <div class="footer-brand">⚡ HookLab</div>
+    <p>AI-powered content for creators who don't have time to think twice.</p>
+    <div class="footer-links">
+      <a href="#pricing" onclick="scrollToPricing()">Pricing</a>
+      <a href="#" onclick="openAuthModal('signin')">Sign In</a>
+      <a href="#" onclick="showUpgradeModal()">Upgrade to Pro</a>
+    </div>
+    <p class="footer-copy">© 2025 HookLab · Built with Claude AI</p>
+  </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="app.js"></script>
+  <script>function scrollToPricing(){document.getElementById('pricing').scrollIntoView({behavior:'smooth'})}</script>
 </body>
 </html>
